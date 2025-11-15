@@ -1,0 +1,93 @@
+---
+title: "SDM_PHAL_SAWE"
+author: "Michelle DePrenger-Levin"
+date: "2025-11-15"
+output: html_document
+---
+
+
+Libraries
+```{r}
+
+rm(list=ls())
+
+library(RCurl)
+# library(Rmisc) ## loads plyr
+# library(rgdal) # errors with readOGR
+# library(sf)
+# library(ENMeval)
+# devtools::install_github("ropensci/prism")
+library(prism)
+library(raster)
+library(dplyr)
+library(tidyr)
+
+# <https://jcoliver.github.io/learn-r/011-species-distribution-models.html> 
+library(terra)
+library(geodata)
+library(predicts)
+
+```
+
+
+Workspace organization 
+```{r}
+## After cloning, can change working directory
+setwd("C:/Users/deprengm/Endemism_SDM")
+
+dir.create(path = "data")
+dir.create(path = "output")
+
+```
+
+
+
+Gather data
+```{r}
+
+# Environmental bioclimatic variable data; 19 bioclimatic variables; 2.5 minutes of a degree; put it in the data folder
+bioclim_data <- worldclim_global(var = "bio",
+                                 res = 2.5,
+                                 path = "data/")
+
+
+# obs_data_PHAL <- read.csv(file = "data/Physaria_alpina_GBIF.csv")
+# obs_data_SAWE <- read.csv(file = "data/Saussarea_weberi_GBIF.csv")
+
+obs_data_PHAL <- read.csv(file = "data/Physaria_alpina.csv")
+obs_data_SAWE <- read.csv(file = "data/Saussarea_weberi.csv")
+
+
+```
+
+Clean occurrence data   
+```{r}
+
+summary(obs_data_PHAL)
+summary(obs_data_SAWE)
+
+```
+
+
+Combine data
+```{r}
+
+head(obs_data_PHAL)
+
+```
+
+
+
+Geographic extent of data  
+```{r}
+
+max_lat_PHAL <- ceiling(max(obs_data_PHAL$latitude))
+min_lat_PHAL <- floor(min(obs_data_PHAL$latitude))
+max_lon_PHAL <- ceiling(max(obs_data_PHAL$longitude))
+min_lon_PHAL <- floor(min(obs_data_PHAL$longitude))
+# Store boundaries in a single extent object
+geographic_extent <- ext(x = c(min_lon, max_lon, min_lat, max_lat))
+
+```
+
+
