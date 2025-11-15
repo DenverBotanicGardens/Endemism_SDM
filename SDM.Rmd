@@ -57,6 +57,11 @@ bioclim_data <- worldclim_global(var = "bio",
 obs_data_PHAL <- read.csv(file = "data/Physaria_alpina.csv")
 obs_data_SAWE <- read.csv(file = "data/Saussarea_weberi.csv")
 
+## Same region, bind datasets
+obs_data <- obs_data_PHAL %>%
+  bind_rows(obs_data_SAWE)
+
+
 
 ```
 
@@ -66,28 +71,239 @@ Clean occurrence data
 summary(obs_data_PHAL)
 summary(obs_data_SAWE)
 
-```
+summary(obs_data)
 
-
-Combine data
-```{r}
-
-head(obs_data_PHAL)
+obs_data <- obs_data %>%
+  filter(!is.na(decimalLatitude)) %>%
+  filter(!is.na(decimalLongitude))
 
 ```
-
 
 
 Geographic extent of data  
 ```{r}
 
-max_lat_PHAL <- ceiling(max(obs_data_PHAL$latitude))
-min_lat_PHAL <- floor(min(obs_data_PHAL$latitude))
-max_lon_PHAL <- ceiling(max(obs_data_PHAL$longitude))
-min_lon_PHAL <- floor(min(obs_data_PHAL$longitude))
+max_lat <- ceiling(max(obs_data$decimalLatitude))
+min_lat <- floor(min(obs_data$decimalLatitude))
+max_lon <- ceiling(max(obs_data$decimalLongitude))
+min_lon <- floor(min(obs_data$decimalLongitude))
 # Store boundaries in a single extent object
 geographic_extent <- ext(x = c(min_lon, max_lon, min_lat, max_lat))
 
 ```
+
+Visualize  
+```{r}
+
+world_map <- world(resolution = 3,
+                   path = "data/")
+
+# Crop the map to our area of interest
+my_map <- crop(x = world_map, y = geographic_extent)
+
+# Plot the base map
+plot(my_map,
+     axes = TRUE, 
+     col = "grey95")
+
+
+cols <- c("olivedrab","goldenrod")
+# Add the points for individual observations
+points(x = obs_data$decimalLongitude, 
+       y = obs_data$decimalLatitude, 
+       col = cols[as.numeric(as.factor(obs_data$genus))],  # "olivedrab", 
+       pch = 20, 
+       cex = 0.75)
+
+```
+
+
+Prep for modeling
+```{r}
+# Make an extent that is 25% larger
+sample_extent <- geographic_extent * 1.25
+
+# Crop bioclim data to desired extent
+bioclim_data <- crop(x = bioclim_data, y = sample_extent)
+
+# Plot the first of the bioclim variables to check on cropping
+## annual mean temperature in degrees Celsius
+plot(bioclim_data[[1]])
+cols <- c("black","white")
+points(x = obs_data$decimalLongitude, 
+       y = obs_data$decimalLatitude, 
+       col = cols[as.numeric(as.factor(obs_data$genus))],  # "olivedrab", 
+       pch = 20, 
+       cex = 0.75)
+```
+
+
+pseudo-absence points (background)
+```{r}
+
+
+# Set the seed for the random-number generator to ensure results are similar
+set.seed(20210707)
+
+# Randomly sample points (same number as our observed points)
+background <- spatSample(x = bioclim_data,
+                         size = 1000,    # generate 1,000 pseudo-absence points
+                         values = FALSE, # don't need values
+                         na.rm = TRUE,   # don't sample from ocean
+                         xy = TRUE)      # just need coordinates
+
+# Look at first few rows of background
+head(background)
+
+plot(my_map,
+     axes = TRUE, 
+     col = "grey95")
+
+# Add the background points
+points(background,
+       col = "grey30",
+       pch = 1,
+       cex = 0.75)
+
+# Add the points for individual observations
+cols <- c("black","olivedrab")
+points(x = obs_data$decimalLongitude, 
+       y = obs_data$decimalLatitude, 
+       col = cols[as.numeric(as.factor(obs_data$genus))],  # "olivedrab", 
+       pch = 20, 
+       cex = 0.75)
+```
+
+```{r}
+# Pull out coordinate columns, x (longitude) first, then y (latitude) from 
+# PHAL data
+presence_PHAL <- obs_data %>%
+  filter(genus == "Physaria") %>%
+  select(decimalLongitude, decimalLatitude) %>%
+  # Add column indicating presence
+  mutate(pa = 1)
+
+# Convert background data to a data frame
+absence <- as.data.frame(background) %>%
+  rename(decimalLongitude = x, decimalLatitude = y) %>%
+  mutate(pa = 0)
+
+# Join data into single data frame
+all_points_PHAL <- rbind(presence_PHAL, absence)
+
+## Saussurea
+presence_SAWE <- obs_data %>%
+  filter(genus == "Saussurea") %>%
+  select(decimalLongitude, decimalLatitude) %>%
+  # Add column indicating presence
+  mutate(pa = 1)
+
+# Join data into single data frame
+all_points_SAWE <- rbind(presence_SAWE, absence)
+
+# Reality check on data
+head(all_points_PHAL)
+head(all_points_SAWE)
+```
+
+
+Environmental data 
+Physaria alpina first
+```{r}
+
+bioclim_extract <- extract(x = bioclim_data,
+                           y = all_points_PHAL[, c("decimalLongitude", "decimalLatitude")],
+                           ID = FALSE) # No need for an ID column
+
+# Add the point and climate datasets together
+points_climate <- cbind(all_points_PHAL, bioclim_extract)
+
+# Identify columns that are latitude & longitude
+drop_cols <- which(colnames(points_climate) %in% c("decimalLongitude", "decimalLatitude"))
+drop_cols # print the values as a reality check; dropping the first and second
+
+# Remove the geographic coordinates from the data frame
+points_climate <- points_climate[, -drop_cols]
+
+```
+
+
+Training and testing 
+```{r}
+
+# Create vector indicating fold
+fold <- folds(x = points_climate,
+              k = 5,
+              by = points_climate$pa)
+
+table(fold)
+
+testing <- points_climate[fold == 1, ]
+training <- points_climate[fold != 1, ]
+```
+
+
+Build Model 
+```{r}
+
+# Build a model using training data
+glm_model <- glm(pa ~ ., data = training, family = binomial())
+
+# Get predicted values from the model
+glm_predict <- predict(bioclim_data, glm_model, type = "response")
+
+# Print predicted values
+plot(glm_predict)
+
+# Use testing data for model evaluation
+glm_eval <- pa_evaluate(p = testing[testing$pa == 1, ],
+                        a = testing[testing$pa == 0, ],
+                        model = glm_model,
+                        type = "response")
+
+
+# Determine minimum threshold for "presence"
+glm_threshold <- glm_eval@thresholds$max_spec_sens
+```
+
+
+Map predicted areas suitable for PHAL  
+```{r}
+# Plot base map
+plot(my_map, 
+     axes = TRUE, 
+     col = "grey95")
+
+# Only plot areas where probability of occurrence is greater than the threshold
+plot(glm_predict > glm_threshold, 
+     add = TRUE, 
+     legend = FALSE, 
+     col = c(NA, "olivedrab")) # <-- Update the values HERE
+
+# And add those observations
+points(x = obs_data$longitude, 
+       y = obs_data$latitude, 
+       col = "black",
+       pch = "+", 
+       cex = 0.75)
+
+# Redraw those country borders
+plot(my_map, add = TRUE, border = "grey5")
+```
+
+
+### NOW do Saussurea  
+
+
+
+
+### SSDM  
+Stacked species distribution models
+Ensemble models with multiple species  
+<https://cran.r-project.org/web/packages/SSDM/vignettes/SSDM.html>  
+
+
+And try Joint Species distribution modeling   
+<https://earthlab.colorado.edu/blog/joint-species-distribution-modeling-r-hmsc>  
 
 
